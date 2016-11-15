@@ -8,39 +8,25 @@ import (
 	"time"
 )
 
-type TCPClient struct {
-	con     net.Conn
-	buf_len []byte
-	mu      sync.Mutex
+func NewTCPListener(addr string) *TCPListener {
+	return &TCPListener{
+		addr: addr,
+	}
 }
-
-func (c *TCPClient) Write(buf []byte) (int, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	binary.LittleEndian.PutUint32(c.buf_len, uint32(len(buf)))
-	c.con.Write(c.buf_len)
-	return c.con.Write(buf)
-}
-
-func (c *TCPClient) Close() error {
-	return c.con.Close()
-}
-
-type TcpListener struct {
-	Addr     string
-	Routable func(io.WriteCloser) Router
-}
-
-func NewTCPListener(addr string, r func(io.WriteCloser) Router) *TcpListener {
-	return &TcpListener{
-		Addr:     addr,
-		Routable: r,
+func NewTCPConnection(con net.Conn) *TCPConnection {
+	return &TCPConnection{
+		conn:          con,
+		write_len_buf: make([]byte, 4, 4),
+		read_len_buf:  make([]byte, 4, 4),
 	}
 }
 
-func (s *TcpListener) Listen() error {
+type TCPListener struct {
+	addr string
+}
 
-	ln, err := net.Listen("tcp", s.Addr)
+func (t *TCPListener) Listen(next func(Conn)) error {
+	ln, err := net.Listen("tcp", t.addr)
 	if err != nil {
 		return err
 	}
@@ -67,33 +53,60 @@ func (s *TcpListener) Listen() error {
 			return err
 		}
 		tempDelay = 0
-		go s.handler(con)
+		go next(NewTCPConnection(con))
 	}
-
 }
 
-func (t *TcpListener) handler(con net.Conn) error {
-	defer con.Close()
-	payload_len := make([]byte, 4, 4)
-	payload := make([]byte, 4096, 4096)
-	router := t.Routable(&TCPClient{
-		con:     con,
-		buf_len: make([]byte, 4, 4),
-	})
-	for {
-		_, err := io.ReadAtLeast(con, payload_len, 4)
-		if err != nil {
-			return err
-		}
-		n := int(binary.LittleEndian.Uint32(payload_len))
-		if n > len(payload) {
-			payload = make([]byte, n, n*2)
-		}
-		_, err = io.ReadAtLeast(con, payload[:n], n)
-		if err != nil {
-			return err
-		}
-		// Worker threads later?
-		go router.Route(payload[:n])
+type TCPConnection struct {
+	conn          net.Conn
+	write_len_buf []byte
+	read_len_buf  []byte
+	write_len     int
+	read_len      int
+	wmu           sync.Mutex
+	rmu           sync.Mutex
+}
+
+func (t *TCPConnection) Close() error {
+	return t.conn.Close()
+}
+
+func (t *TCPConnection) Receive(payload *[]byte) (n int, err error) {
+	t.rmu.Lock()
+	defer t.rmu.Unlock()
+	_, err = io.ReadAtLeast(t.conn, t.read_len_buf, 4)
+	if err != nil {
+		return
 	}
+	n = int(binary.LittleEndian.Uint32(t.read_len_buf))
+	if len(*payload) < n {
+		*payload = make([]byte, n, n)
+	}
+	_, err = io.ReadAtLeast(t.conn, (*payload)[:n], n)
+	if err != nil {
+		n = 0
+		return
+	}
+	return
+}
+
+func (t *TCPConnection) Send(payload ...[]byte) (err error) {
+	t.wmu.Lock()
+	defer t.wmu.Unlock()
+	t.write_len = 0
+	for _, p := range payload {
+		t.write_len += len(p)
+	}
+	binary.LittleEndian.PutUint32(t.write_len_buf, uint32(t.write_len))
+	_, err = t.conn.Write(t.write_len_buf)
+	if err != nil {
+		return
+	}
+	for _, p := range payload {
+		_, err = t.conn.Write(p)
+		if err != nil {
+			return
+		}
+	}
+	return
 }
