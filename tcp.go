@@ -1,28 +1,21 @@
 package daakia
 
 import (
-	"encoding/binary"
-	"io"
 	"net"
-	"sync"
 	"time"
 )
 
-func NewTCPListener(addr string) *TCPListener {
+func NewTCPListener(addr string,bufSize int) *TCPListener {
 	return &TCPListener{
 		addr: addr,
-	}
-}
-func NewTCPConnection(con net.Conn) *TCPConnection {
-	return &TCPConnection{
-		conn:          con,
-		write_len_buf: make([]byte, 4, 4),
-		read_len_buf:  make([]byte, 4, 4),
+		bufSize: bufSize,
 	}
 }
 
+
 type TCPListener struct {
 	addr string
+	bufSize int
 }
 
 func (t *TCPListener) Listen(next func(Conn)) error {
@@ -53,60 +46,6 @@ func (t *TCPListener) Listen(next func(Conn)) error {
 			return err
 		}
 		tempDelay = 0
-		go next(NewTCPConnection(con))
+		go next(NewConnection(con,t.bufSize))
 	}
-}
-
-type TCPConnection struct {
-	conn          net.Conn
-	write_len_buf []byte
-	read_len_buf  []byte
-	write_len     int
-	read_len      int
-	wmu           sync.Mutex
-	rmu           sync.Mutex
-}
-
-func (t *TCPConnection) Close() error {
-	return t.conn.Close()
-}
-
-func (t *TCPConnection) Receive(payload *[]byte) (n int, err error) {
-	t.rmu.Lock()
-	defer t.rmu.Unlock()
-	_, err = io.ReadAtLeast(t.conn, t.read_len_buf, 4)
-	if err != nil {
-		return
-	}
-	n = int(binary.LittleEndian.Uint32(t.read_len_buf))
-	if len(*payload) < n {
-		*payload = make([]byte, n, n)
-	}
-	_, err = io.ReadAtLeast(t.conn, (*payload)[:n], n)
-	if err != nil {
-		n = 0
-		return
-	}
-	return
-}
-
-func (t *TCPConnection) Send(payload ...[]byte) (err error) {
-	t.wmu.Lock()
-	defer t.wmu.Unlock()
-	t.write_len = 0
-	for _, p := range payload {
-		t.write_len += len(p)
-	}
-	binary.LittleEndian.PutUint32(t.write_len_buf, uint32(t.write_len))
-	_, err = t.conn.Write(t.write_len_buf)
-	if err != nil {
-		return
-	}
-	for _, p := range payload {
-		_, err = t.conn.Write(p)
-		if err != nil {
-			return
-		}
-	}
-	return
 }
