@@ -1,8 +1,9 @@
 package daakia
 
 import (
-	"golang.org/x/net/websocket"
 	"net/http"
+
+	"golang.org/x/net/websocket"
 )
 
 func NewWebSocketListener(addr string, bufSize int, mux *http.ServeMux) *WebSocketListener {
@@ -10,22 +11,27 @@ func NewWebSocketListener(addr string, bufSize int, mux *http.ServeMux) *WebSock
 		mux = http.NewServeMux()
 	}
 	return &WebSocketListener{
-		addr: addr,
-		mx:   mux,
+		addr:    addr,
+		mx:      mux,
 		bufSize: bufSize,
 	}
 }
 
 type WebSocketListener struct {
-	addr string
-	mx   *http.ServeMux
+	addr    string
+	mx      *http.ServeMux
 	bufSize int
+	next    func(Conn)
 }
 
-func (w *WebSocketListener) Listen(next func(Conn)) error {
+func (w *WebSocketListener) Next(next func(Conn)) {
+	w.next = next
+}
+
+func (w *WebSocketListener) Listen() error {
 	w.mx.Handle("/", websocket.Handler(func(conn *websocket.Conn) {
 		conn.PayloadType = websocket.BinaryFrame
-		next(NewConnection(conn,w.bufSize))
+		w.next(NewConnection(conn, w.bufSize))
 	}))
 	return http.ListenAndServe(w.addr, w.mx)
 }

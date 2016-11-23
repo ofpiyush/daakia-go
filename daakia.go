@@ -1,16 +1,16 @@
 package daakia
 
 import (
-	"io"
-	"errors"
-	"encoding/binary"
-	"net"
 	"bufio"
+	"encoding/binary"
+	"errors"
+	"io"
+	"net"
 	"sync"
 )
 
 const (
-	MAX_PAYLOAD_SIZE = 10*1024*1024
+	MAX_PAYLOAD_SIZE = 10 * 1024 * 1024
 )
 
 var (
@@ -20,11 +20,12 @@ var (
 type Conn interface {
 	io.Closer
 	Receive(*[]byte) (int, error)
-	Send([]byte,[]byte) error
+	Send([]byte, []byte) error
 }
 
 type Listener interface {
-	Listen(func(Conn)) error
+	Next(func(Conn))
+	Listen() error
 }
 
 type Middleware interface {
@@ -38,12 +39,11 @@ type MethodSignature struct {
 	HasPayload bool
 }
 
-
-func NewConnection(con net.Conn,bufSize int) *Connection {
+func NewConnection(con net.Conn, bufSize int) *Connection {
 	return &Connection{
-		conn: con,
-		r: bufio.NewReaderSize(con,bufSize),
-		w: bufio.NewWriterSize(con,bufSize),
+		conn:          con,
+		r:             bufio.NewReaderSize(con, bufSize),
+		w:             bufio.NewWriterSize(con, bufSize),
 		write_len_buf: make([]byte, 4, 4),
 		read_len_buf:  make([]byte, 4, 4),
 	}
@@ -106,12 +106,32 @@ func (c *Connection) Send(header, payload []byte) (err error) {
 		return
 	}
 	_, err = c.w.Write(header)
-		if err != nil {
-			return
-		}
+	if err != nil {
+		return
+	}
 	_, err = c.w.Write(payload)
-		if err != nil {
-			return
-		}
+	if err != nil {
+		return
+	}
 	return
+}
+
+func Serve(listeners ...Listener) error {
+	err := make(chan error)
+
+	for _, listener := range listeners {
+		go func(l Listener) {
+			err <- l.Listen()
+		}(listener)
+	}
+	for {
+		select {
+		case x := <-err:
+			if x != nil {
+				return x
+			}
+			// Add sigterm etc options
+		}
+	}
+	return nil
 }

@@ -5,20 +5,24 @@ import (
 	"time"
 )
 
-func NewTCPListener(addr string,bufSize int) *TCPListener {
+func NewTCPListener(addr string, bufSize int) *TCPListener {
 	return &TCPListener{
-		addr: addr,
+		addr:    addr,
 		bufSize: bufSize,
 	}
 }
 
-
 type TCPListener struct {
-	addr string
+	addr    string
 	bufSize int
+	next    func(Conn)
 }
 
-func (t *TCPListener) Listen(next func(Conn)) error {
+func (t *TCPListener) Next(next func(Conn)) {
+	t.next = next
+}
+
+func (t *TCPListener) Listen() error {
 	ln, err := net.Listen("tcp", t.addr)
 	if err != nil {
 		return err
@@ -46,6 +50,6 @@ func (t *TCPListener) Listen(next func(Conn)) error {
 			return err
 		}
 		tempDelay = 0
-		go next(NewConnection(con,t.bufSize))
+		go t.next(NewConnection(con, t.bufSize))
 	}
 }
